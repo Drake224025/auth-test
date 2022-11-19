@@ -1,15 +1,24 @@
 const express = require("express");
 const ejs = require("ejs");
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
-const saltRounds = 10;
-// require("dotenv").config();
+const session = require("express-session");
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 
 const app = express();
 
 app.set("view engine", "ejs");
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(
+  session({
+    secret: "random secret",
+    resave: false,
+    saveUninitialized: true,
+  })
+);
+app.use(passport.initialize());
+app.use(passport.session());
 
 mongoose.connect("mongodb://127.0.0.1:27017/userDB");
 
@@ -17,13 +26,17 @@ const userSchema = new mongoose.Schema({
   email: String,
   password: String,
 });
-
+userSchema.plugin(passportLocalMongoose);
 // userSchema.plugin(encrypt, {
 //   secret: process.env.SECRET,
 //   encryptedFields: ["password"],
 // });
 
 const User = new mongoose.model("user", userSchema);
+passport.use(User.createStrategy());
+
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 app.get("/", (req, res) => {
   res.render("home");
@@ -37,14 +50,18 @@ app
   .post((req, res) => {
     const username = req.body.username;
     const password = req.body.password;
+    const user = new User({
+      username,
+      password,
+    });
 
-    User.findOne({ email: username }, (err, docs) => {
-      if (!err) {
-        bcrypt.compare(password, docs.password, function (err, result) {
-          if (result === true) res.render("secrets");
-        });
+    req.login(user, (err) => {
+      if (err) {
+        console.log("err", err);
       } else {
-        res.send(err);
+        passport.authenticate("local")(req, res, () => {
+          res.redirect("/secrets");
+        });
       }
     });
   });
@@ -55,22 +72,42 @@ app
     res.render("register");
   })
   .post((req, res) => {
-    bcrypt.hash(req.body.password, saltRounds, function (err, hash) {
-      // Store hash in your password DB.
-      const newUser = new User({
-        email: req.body.username,
-        password: hash,
-      });
-
-      User.create(newUser, (err, doc) => {
-        if (!err) {
-          res.render("secrets");
+    User.register(
+      {
+        username: req.body.username,
+      },
+      req.body.password,
+      (err, user) => {
+        if (err) {
+          console.log("err", err);
+          res.redirect("/register");
         } else {
-          res.send(err);
+          passport.authenticate("local")(req, res, () => {
+            res.redirect("/secrets");
+          });
         }
-      });
-    });
+      }
+    );
   });
+
+app.route("/secrets").get((req, res) => {
+  if (req.isAuthenticated()) {
+    console.log(req);
+    res.render("secrets");
+  } else {
+    res.redirect("/login");
+  }
+});
+
+app.route("/logout").get((req, res) => {
+  req.logout((err) => {
+    if (err) {
+      console.log(err);
+    } else {
+      res.redirect("/");
+    }
+  });
+});
 
 app.listen(3000, () => {
   console.log("server started on port 3000");
